@@ -1,9 +1,9 @@
 /*!
- * VERSION: 1.18.6
- * DATE: 2016-07-08
+ * VERSION: 1.20.1
+ * DATE: 2017-06-29
  * UPDATES AND DOCS AT: http://greensock.com
  *
- * @license Copyright (c) 2008-2016, GreenSock. All rights reserved.
+ * @license Copyright (c) 2008-2017, GreenSock. All rights reserved.
  * This work is subject to the terms at http://greensock.com/standard-license or for
  * Club GreenSock members, the software agreement that was issued with your membership.
  * 
@@ -69,7 +69,7 @@ var _gsScope = (typeof(module) !== "undefined" && module.exports && typeof(globa
 			},
 			p = TimelineLite.prototype = new SimpleTimeline();
 
-		TimelineLite.version = "1.19.0";
+		TimelineLite.version = "1.20.1";
 		p.constructor = TimelineLite;
 		p.kill()._gc = p._forcingPlayhead = p._hasPause = false;
 
@@ -233,6 +233,10 @@ var _gsScope = (typeof(module) !== "undefined" && module.exports && typeof(globa
 
 			SimpleTimeline.prototype.add.call(this, value, position);
 
+			if (value._time) { //in case, for example, the _startTime is moved on a tween that has already rendered. Imagine it's at its end state, then the startTime is moved WAY later (after the end of this timeline), it should render at its beginning.
+				value.render((this.rawTime() - value._startTime) * value._timeScale, false, false);
+			}
+
 			//if the timeline has already ended but the inserted tween/timeline extends the duration, we should enable this timeline again so that it renders properly. We should also align the playhead with the parent timeline's when appropriate.
 			if (this._gc || this._time === this._duration) if (!this._paused) if (this._duration < this.duration()) {
 				//in case any of the ancestors had completed but should now be enabled...
@@ -274,8 +278,8 @@ var _gsScope = (typeof(module) !== "undefined" && module.exports && typeof(globa
 			var last = this._last;
 			if (!last) {
 				this._time = this._totalTime = this._duration = this._totalDuration = 0;
-			} else if (this._time > last._startTime + last._totalDuration / last._timeScale) {
-				this._time = this.duration();
+			} else if (this._time > this.duration()) {
+				this._time = this._duration;
 				this._totalTime = this._totalDuration;
 			}
 			return this;
@@ -316,7 +320,7 @@ var _gsScope = (typeof(module) !== "undefined" && module.exports && typeof(globa
 		};
 
 		p._parseTimeOrLabel = function(timeOrLabel, offsetOrLabel, appendIfAbsent, ignore) {
-			var i;
+			var clippedDuration, i;
 			//if we're about to add a tween/timeline (or an array of them) that's already a child of this timeline, we should remove it first so that it doesn't contaminate the duration().
 			if (ignore instanceof Animation && ignore.timeline === this) {
 				this.remove(ignore);
@@ -328,22 +332,23 @@ var _gsScope = (typeof(module) !== "undefined" && module.exports && typeof(globa
 					}
 				}
 			}
+			clippedDuration = (this.duration() > 99999999999) ? this.recent().endTime(false) : this._duration; //in case there's a child that infinitely repeats, users almost never intend for the insertion point of a new child to be based on a SUPER long value like that so we clip it and assume the most recently-added child's endTime should be used instead.
 			if (typeof(offsetOrLabel) === "string") {
-				return this._parseTimeOrLabel(offsetOrLabel, (appendIfAbsent && typeof(timeOrLabel) === "number" && this._labels[offsetOrLabel] == null) ? timeOrLabel - this.duration() : 0, appendIfAbsent);
+				return this._parseTimeOrLabel(offsetOrLabel, (appendIfAbsent && typeof(timeOrLabel) === "number" && this._labels[offsetOrLabel] == null) ? timeOrLabel - clippedDuration : 0, appendIfAbsent);
 			}
 			offsetOrLabel = offsetOrLabel || 0;
 			if (typeof(timeOrLabel) === "string" && (isNaN(timeOrLabel) || this._labels[timeOrLabel] != null)) { //if the string is a number like "1", check to see if there's a label with that name, otherwise interpret it as a number (absolute value).
 				i = timeOrLabel.indexOf("=");
 				if (i === -1) {
 					if (this._labels[timeOrLabel] == null) {
-						return appendIfAbsent ? (this._labels[timeOrLabel] = this.duration() + offsetOrLabel) : offsetOrLabel;
+						return appendIfAbsent ? (this._labels[timeOrLabel] = clippedDuration + offsetOrLabel) : offsetOrLabel;
 					}
 					return this._labels[timeOrLabel] + offsetOrLabel;
 				}
 				offsetOrLabel = parseInt(timeOrLabel.charAt(i-1) + "1", 10) * Number(timeOrLabel.substr(i+1));
-				timeOrLabel = (i > 1) ? this._parseTimeOrLabel(timeOrLabel.substr(0, i-1), 0, appendIfAbsent) : this.duration();
+				timeOrLabel = (i > 1) ? this._parseTimeOrLabel(timeOrLabel.substr(0, i-1), 0, appendIfAbsent) : clippedDuration;
 			} else if (timeOrLabel == null) {
-				timeOrLabel = this.duration();
+				timeOrLabel = clippedDuration;
 			}
 			return Number(timeOrLabel) + offsetOrLabel;
 		};
@@ -374,7 +379,7 @@ var _gsScope = (typeof(module) !== "undefined" && module.exports && typeof(globa
 				prevTimeScale = this._timeScale,
 				prevPaused = this._paused,
 				tween, isComplete, next, callback, internalForce, pauseTween, curTime;
-			if (time >= totalDur - 0.0000001) { //to work around occasional floating point math artifacts.
+			if (time >= totalDur - 0.0000001 && time >= 0) { //to work around occasional floating point math artifacts.
 				this._totalTime = this._time = totalDur;
 				if (!this._reversed) if (!this._hasPausedChild()) {
 					isComplete = true;
@@ -755,8 +760,8 @@ var _gsScope = (typeof(module) !== "undefined" && module.exports && typeof(globa
 			return (tl === Animation._rootFramesTimeline);
 		};
 
-		p.rawTime = function() {
-			return this._paused ? this._totalTime : (this._timeline.rawTime() - this._startTime) * this._timeScale;
+		p.rawTime = function(wrapRepeats) {
+			return (wrapRepeats && (this._paused || (this._repeat && this.time() > 0 && this.totalProgress() < 1))) ? this._totalTime % (this._duration + this._repeatDelay) : this._paused ? this._totalTime : (this._timeline.rawTime(wrapRepeats) - this._startTime) * this._timeScale;
 		};
 
 		return TimelineLite;
@@ -772,10 +777,10 @@ var _gsScope = (typeof(module) !== "undefined" && module.exports && typeof(globa
 	var getGlobal = function() {
 		return (_gsScope.GreenSockGlobals || _gsScope)[name];
 	};
-	if (typeof(define) === "function" && define.amd) { //AMD
-		define(["TweenLite"], getGlobal);
-	} else if (typeof(module) !== "undefined" && module.exports) { //node
+	if (typeof(module) !== "undefined" && module.exports) { //node
 		require("./TweenLite.js"); //dependency
 		module.exports = getGlobal();
+	} else if (typeof(define) === "function" && define.amd) { //AMD
+		define(["TweenLite"], getGlobal);
 	}
 }("TimelineLite"));
